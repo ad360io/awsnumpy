@@ -1,0 +1,127 @@
+#!/bin/bash
+# 2018 QChain Inc. All Rights Reserved.
+# License: Apache v2, see LICENSE.
+#
+#   build [-h] [-v] [-r] -- Build NumPy for AWS lambda.
+#
+#   Opts:
+#       [-h] [--help]       Print help.
+#       [-v] [--version]    Print version.
+#       [-r] [--runtime]    Set Python runtime (default "36").
+#
+
+# ROOT
+# ----
+
+if [[ $EUID -ne 0 ]]; then
+   echo "This script must be run as root"
+   exit 1
+fi
+
+# OPTIONS
+# -------
+
+VERSION="0.1.0"
+USAGE="$(basename "$0") [-h] [-v] [-ro] -- Build NumPy for AWS lambda.
+Opts:
+    [-h] [--help]       Print help.
+    [-v] [--version]    Print version.
+    [-r] [--runtime]    Set Python runtime (default \"36\").
+    [-o] [--outdir]     Set module outdir (default \"/var/task\").
+"
+OPTS=`getopt -o vhro: --long version,help,runtime,outdir: -n 'parse-options' -- "$@"`
+
+if [ $? != 0 ] ; then echo "Failed parsing options." >&2 ; exit 1 ; fi
+
+eval set -- "$OPTS"
+
+RUNTIME=36
+OUTDIR=/var/task
+
+while true; do
+  case "$1" in
+    -v | --version )
+        echo "$(basename "$0") -- v$VERSION"
+        exit
+        ;;
+    -h | --help )
+        echo "$USAGE"
+        exit
+        ;;
+    -r | --runtime )
+        RUNTIME="$2";
+        shift;
+        shift
+        ;;
+    -o | --outdir )
+        OUTDIR="$2";
+        shift;
+        shift
+        ;;
+    -- )
+        shift;
+        break
+        ;;
+    * )
+        break
+        ;;
+  esac
+done
+
+# PATH
+# ----
+
+SOURCE="${BASH_SOURCE[0]}"
+while [ -h "$SOURCE" ]; do
+  DIR="$( cd -P "$( dirname "$SOURCE" )" && pwd )"
+  SOURCE="$(readlink "$SOURCE")"
+  [[ $SOURCE != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+DIR="$( cd -P "$( dirname "$SOURCE" )" && pwd )"
+DEST="$DIR/dist"
+
+# FUNCTIONS
+# ---------
+
+# Create the output directory (`dist`).
+function make_dist()
+{
+    if [ -d "$DEST" ]; then
+        rm -rf "$DEST"
+    fi
+    mkdir -p "$DEST"
+}
+
+
+# Relax sharing
+function relax_selinux
+{
+    if hash chcon 2>/dev/null; then
+        # On Linux, and have SELinux enabled
+        chcon -Rt svirt_sandbox_file_t "$DEST" >/dev/null 2>&1
+    fi
+}
+
+# Build the AWS Docker container.
+function build_docker()
+{
+    cd "$DIR"
+    docker build -t "awsnumpy$1:latest" . \
+        --build-arg python_runtime=$1 \
+        --build-arg out_dir="$2"
+}
+
+# Run the docker container
+function run_docker()
+{
+    cd "$DIR"
+    docker run -v "$DIR/dist":"$2" -t awsnumpy$1
+}
+
+# CALL
+# ----
+
+make_dist
+relax_selinux
+build_docker $RUNTIME "$OUTDIR"
+run_docker $RUNTIME "$OUTDIR"
